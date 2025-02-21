@@ -79,9 +79,44 @@ MEDICAL_EXAMPLES = [
     )
 ]
 
-def create_dataset() -> List[Dict[str, Any]]:
-    """Create a dataset in the format expected by the GRPO trainer."""
-    return [example.to_dict() for example in MEDICAL_EXAMPLES]
+def create_medical_dataset():
+    """
+    Create a dataset of medical cases for training.
+    
+    Returns:
+        List[Dict]: List of medical cases with prompts and expected diagnoses
+    """
+    medical_cases = [
+        {
+            "prompt": "Patient presents with fever, cough, and difficulty breathing for the past 3 days. Chest X-ray shows patchy infiltrates.",
+            "diagnosis": "Pneumonia",
+            "symptoms": ["fever", "cough", "dyspnea"],
+            "test_results": ["patchy infiltrates on chest X-ray"]
+        },
+        {
+            "prompt": "65-year-old patient with sudden onset chest pain, radiating to left arm, sweating, and nausea.",
+            "diagnosis": "Myocardial Infarction",
+            "symptoms": ["chest pain", "radiation to left arm", "sweating", "nausea"],
+            "test_results": []
+        },
+        {
+            "prompt": "Patient reports severe headache, neck stiffness, and sensitivity to light. Temperature 39.5°C.",
+            "diagnosis": "Meningitis",
+            "symptoms": ["severe headache", "neck stiffness", "photophobia", "fever"],
+            "test_results": ["elevated temperature"]
+        }
+    ]
+    
+    # Convert to dataset format
+    dataset = []
+    for case in medical_cases:
+        dataset.append({
+            "prompt": f"Medical Case:\n{case['prompt']}\n\nBased on the above information, what is the most likely diagnosis? Please explain your reasoning.",
+            "completion": f"After analyzing the symptoms and test results, the most likely diagnosis is {case['diagnosis']}.",
+            "diagnosis": case["diagnosis"]
+        })
+    
+    return dataset
 
 def calculate_diagnosis_similarity(predicted: str, ground_truth: str) -> float:
     """
@@ -154,78 +189,49 @@ def diagnosis_reward_function(
     
     return rewards
 
-def setup_trainer(
-    model_name: str = "Qwen/Qwen2-0.5B-Instruct",
-    train_dataset: List[Dict[str, Any]] = None,
-    eval_dataset: List[Dict[str, Any]] = None,
-    output_dir: str = "medical_model_output"
-) -> GRPOTrainer:
+def setup_trainer(output_dir: str = "medical-diagnosis-model"):
     """
-    Set up the GRPO trainer with medical diagnosis configuration using Qwen2-0.5B-Instruct.
+    Set up the GRPO trainer for medical diagnosis.
     
     Args:
-        model_name: Name or path of the pretrained model
-        train_dataset: Training dataset
-        eval_dataset: Evaluation dataset
-        output_dir: Directory to save the model and training outputs
-    
+        output_dir: Directory to save the model outputs
+        
     Returns:
-        Configured GRPOTrainer instance
+        GRPOTrainer: Configured trainer ready for medical diagnosis tasks
     """
-    # Default to example dataset if none provided
-    if train_dataset is None:
-        train_dataset = create_dataset()
-    if eval_dataset is None:
-        eval_dataset = create_dataset()[:2]  # Use first two examples for eval
-    
-    # Configuration for medical diagnosis task with GRPO
+    # Configuration for quick test run
     config = GRPOConfig(
         output_dir=output_dir,
-        learning_rate=1e-5,
-        num_generations=4,  # Number of generations per prompt
-        max_prompt_length=512,
-        max_completion_length=128,
-        per_device_train_batch_size=4,
-        gradient_accumulation_steps=2,
-        num_train_epochs=3,
-        max_steps=10000,
-        logging_steps=10,
-        save_steps=100,
-        beta=0.04,  # KL coefficient
-        num_iterations=2,  # Number of iterations per batch
-        epsilon=0.2,  # Clipping parameter
-        temperature=0.7,  # Temperature for generation
-        use_vllm=False,  # Not using vLLM for now
-        remove_unused_columns=False,  # Keep all columns for reward computation
-        seed=42
+        learning_rate=1.41e-5,
+        per_device_train_batch_size=2,  # Small batch size
+        gradient_accumulation_steps=1,   # No gradient accumulation
+        max_steps=2,                     # Only run 2 steps
+        logging_steps=1,                 # Log every step
+        save_steps=2,                    # Save at the end
+        max_prompt_length=128,           # Shorter sequences
+        max_completion_length=64,        # Shorter completions
+        num_generations=2,               # Minimal generations
+        beta=0.04,
+        temperature=0.6,
+        use_vllm=False,
+        remove_unused_columns=False,
+        seed=42,
+        report_to="none"
     )
+
+    # Initialize tokenizer and model
+    model_name = "Qwen/Qwen2-0.5B-Instruct"
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer.pad_token = tokenizer.eos_token  # Ensure padding token is set
     
-    # Initialize tokenizer with Qwen2 specific settings
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_name,
-        trust_remote_code=True,
-        padding_side="left"
-    )
-    
-    # Ensure padding token is set
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    
-    # Initialize model with recommended settings for Qwen2
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype="auto",  # Qwen2 recommended setting
-        device_map="auto",
-        trust_remote_code=True
-    )
-    
-    # Initialize trainer with reward function
+    # Initialize model
+    model = AutoModelForCausalLM.from_pretrained(model_name)
+
     trainer = GRPOTrainer(
         model=model,
         reward_funcs=diagnosis_reward_function,
         args=config,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
+        train_dataset=create_medical_dataset(),
         processing_class=tokenizer
     )
     
@@ -233,11 +239,11 @@ def setup_trainer(
 
 if __name__ == "__main__":
     # Example usage
-    dataset = create_dataset()
+    dataset = create_medical_dataset()
     print(f"Created dataset with {len(dataset)} examples")
     print("\nExample data point:")
     print(json.dumps(dataset[0], indent=2))
     
     # Setup trainer
-    trainer = setup_trainer(train_dataset=dataset)
+    trainer = setup_trainer()
     print("\nTrainer setup complete. Ready for training.") 
